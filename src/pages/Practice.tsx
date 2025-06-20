@@ -180,8 +180,7 @@ export default function SpeechPractice() {
   const [score, setScore] = useState(0)
   const [streak] = useState(5)
   const [cameraActive, setCameraActive] = useState(false)
-  const [balloons, setBalloons] = useState(["🎈", "🎈", "🎈", "🎈", "🎈"])
-  const [candles, setCandles] = useState(["🕯️", "🕯️", "🕯️"])
+ 
   const [discriminationScore, setDiscriminationScore] = useState(0)
   const [totalDiscrimination, setTotalDiscrimination] = useState(0)
   const [feedback, setFeedback] = useState<{
