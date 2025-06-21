@@ -114,7 +114,7 @@ const KaraokeTherapy: React.FC = () => {
       duration: 35,
       category: "Nursery Rhymes",
       therapeuticFocus: ["Articulation", "Rhythm", "Breathing"],
-      audioUrl: "assets/audio/twinkle-twinkle.mp3",
+      audioUrl: "/assets/audio/twinkle-twinkle.mp3",
       lyrics: [
         {
           time: 0,
@@ -554,26 +554,53 @@ const KaraokeTherapy: React.FC = () => {
     }
   }, [currentSong])
 
-  const handlePlayPause = useCallback(async () => {
-    const audio = audioRef.current
+ const handlePlayPause = useCallback(async () => {
+  const audio = audioRef.current;
 
-    if (isPlaying) {
-      audio.pause()
-      setIsPlaying(false)
-    } else {
-      try {
-        if (audio.src !== currentSong.audioUrl) {
-          audio.src = currentSong.audioUrl
-          await audio.load()
-        }
-        await audio.play()
-        setIsPlaying(true)
-      } catch (error) {
-        console.error("Playback failed:", error)
-        setIsPlaying(false)
+  if (isPlaying) {
+    audio.pause();
+    setIsPlaying(false);
+  } else {
+    try {
+      // Force reload if source changed
+      if (audio.src !== currentSong.audioUrl) {
+        audio.src = currentSong.audioUrl;
+        audio.load();
+        
+        // Wait for the audio to be ready
+        await new Promise((resolve, reject) => {
+          audio.oncanplaythrough = resolve;
+          audio.onerror = reject;
+        });
+      }
+      
+      await audio.play();
+      setIsPlaying(true);
+    } catch (error) {
+      console.error("Playback failed:", error);
+      setIsPlaying(false);
+      
+      // Additional error handling
+      if (error instanceof Error && error.message.includes("404")) {
+        console.error("Audio file not found at:", currentSong.audioUrl);
       }
     }
-  }, [isPlaying, currentSong])
+  }
+}, [isPlaying, currentSong]);
+  useEffect(() => {
+  const audio = audioRef.current;
+
+  const handleError = () => {
+    console.error("Audio error:", audio.error);
+    setIsPlaying(false);
+  };
+
+  audio.addEventListener('error', handleError);
+
+  return () => {
+    audio.removeEventListener('error', handleError);
+  };
+}, []);
 
   const handleRestart = useCallback(() => {
     if (audioRef.current) {
