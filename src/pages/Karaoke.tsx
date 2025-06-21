@@ -118,7 +118,7 @@ const KaraokeTherapy: React.FC = () => {
       category: "Nursery Rhymes",
       therapeuticFocus: ["Articulation", "Rhythm", "Breathing"],
       // Using a working online audio file
-      audioUrl: "/assets/audio/twinkle-twinkle.mp3",
+     audioUrl: "/assets/audio/twinkle-twinkle.mp3",
       lyrics: [
         {
           time: 0,
