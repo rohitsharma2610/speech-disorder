@@ -14,14 +14,23 @@ import {
   Volume2,
   CheckCircle,
   Target,
+  Gamepad2,
   BookOpen,
   MessageCircle,
   TrendingUp,
+  Square,
   ThumbsUp,
   AlertCircle,
   X,
   Loader2,
 } from "lucide-react"
+import axios from "axios"
+
+// Create axios instance with timeout
+const api = axios.create({
+  baseURL: 'http://localhost:5000',
+  timeout: 1550000 // 5 second timeout
+});
 
 // Sample data for practice
 const articulationWords = [
@@ -180,7 +189,8 @@ export default function SpeechPractice() {
   const [score, setScore] = useState(0)
   const [streak] = useState(5)
   const [cameraActive, setCameraActive] = useState(false)
- 
+  const [balloons, setBalloons] = useState(["🎈", "🎈", "🎈", "🎈", "🎈"])
+  const [candles, setCandles] = useState(["🕯️", "🕯️", "🕯️"])
   const [discriminationScore, setDiscriminationScore] = useState(0)
   const [totalDiscrimination, setTotalDiscrimination] = useState(0)
   const [feedback, setFeedback] = useState<{
@@ -192,11 +202,63 @@ export default function SpeechPractice() {
   const [showTips, setShowTips] = useState(false)
   const [recordingTime, setRecordingTime] = useState(0)
 
+  const [loading, setLoading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [systemActive, setSystemActive] = useState(false);
+  const [message, setMessage] = useState('System ready');
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null)
+
+  const checkSystemStatus = async () => {
+    try {
+      const response = await api.get('/api/status', {timeout:1000});
+      setSystemActive(response.data.active);
+      setMessage(response.data.message);
+    } catch (error) {
+      setSystemActive(false);
+         if (error.code === 'ECONNABORTED') {
+      setMessage('Backend timeout - is it running?');
+    } else if (error.message.includes('Network Error')) {
+      setMessage('Cannot connect to backend');
+    } else {
+      setMessage('Backend unavailable');
+    }
+      console.error('Status check:', error);
+    }
+  };
+
+  useEffect(() => {
+    checkSystemStatus();
+  }, []);
+
+  const toggleSystem = async () => {
+    setLoading(true);
+    setMessage('Processing...');
+    
+    try {
+      const response = await api.post('/api/toggle').catch(error => {
+      if (error.code === 'ECONNABORTED') {
+        throw new Error('Backend is taking too long to respond');
+      }
+      throw error;
+    });
+      setSystemActive(response.data.active);
+      setMessage(response.data.message);
+      
+      // Refresh status after delay
+      setTimeout(checkSystemStatus, 1500);
+    } catch (error) {
+      setSystemActive(false);
+      setMessage('Operation failed - check backend');
+      console.error('Toggle error:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Optimized voice analysis function
   const analyzeRecording = useCallback(
@@ -470,7 +532,41 @@ export default function SpeechPractice() {
     }, 3000)
   }
 
-  
+  const popBalloon = () => {
+    if (balloons.length > 0) {
+      setBalloons((prev) => prev.slice(1))
+      setScore((prev) => prev + 5)
+      if (balloons.length === 1) {
+        setFeedback({
+          type: "excellent",
+          message: "🎈 Amazing! You popped all the balloons!",
+          show: true,
+        })
+        setTimeout(() => {
+          setBalloons(["🎈", "🎈", "🎈", "🎈", "🎈"])
+          setFeedback((prev) => ({ ...prev, show: false }))
+        }, 2000)
+      }
+    }
+  }
+
+  const blowCandle = () => {
+    if (candles.length > 0) {
+      setCandles((prev) => prev.slice(1))
+      setScore((prev) => prev + 5)
+      if (candles.length === 1) {
+        setFeedback({
+          type: "excellent",
+          message: "🕯️ Wonderful! You blew out all the candles!",
+          show: true,
+        })
+        setTimeout(() => {
+          setCandles(["🕯️", "🕯️", "🕯️"])
+          setFeedback((prev) => ({ ...prev, show: false }))
+        }, 2000)
+      }
+    }
+  }
 
   const nextRoleplay = () => {
     setCurrentRoleplayIndex((prev) => (prev + 1) % roleplays.length)
@@ -529,9 +625,18 @@ export default function SpeechPractice() {
           Start Recording
         </Button>
       ) : isRecording ? (
-        <div className="flex items-center gap-2 text-red-600 font-medium">
-          <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
-          <span className="text-sm sm:text-base">Recording... {formatTime(recordingTime)}</span>
+        <div className="flex flex-col items-center gap-2">
+          <div className="flex items-center gap-2 text-red-600 font-medium">
+            <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+            <span className="text-sm sm:text-base">Recording... {formatTime(recordingTime)}</span>
+          </div>
+          <Button
+            onClick={stopRecording}
+            className="bg-red-500 hover:bg-red-600 text-white w-full sm:w-auto text-sm sm:text-base"
+          >
+            <Square className="w-3 h-3 sm:w-4 sm:h-4 mr-2" />
+            Stop Recording
+          </Button>
         </div>
       ) : (
         <div className="flex items-center gap-2 text-blue-600">
@@ -654,7 +759,10 @@ export default function SpeechPractice() {
               <Camera className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
               <span className="text-xs sm:text-sm">Mirror</span>
             </TabsTrigger>
-            
+            <TabsTrigger value="games" className="data-[state=active]:bg-rose-200 p-2 sm:p-3">
+              <Gamepad2 className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
+              <span className="text-xs sm:text-sm">Games</span>
+            </TabsTrigger>
             <TabsTrigger value="stories" className="data-[state=active]:bg-rose-200 p-2 sm:p-3">
               <BookOpen className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
               <span className="text-xs sm:text-sm">Stories</span>
@@ -910,13 +1018,25 @@ export default function SpeechPractice() {
                         </div>
                       )}
                     </div>
-                    <Button
-                      onClick={cameraActive ? stopCamera : startCamera}
-                      className="mt-4 bg-rose-500 hover:bg-rose-600 text-white w-full sm:w-auto text-sm sm:text-base"
-                    >
-                      <Camera className="w-3 h-3 sm:w-4 sm:h-4 mr-2" />
-                      {cameraActive ? "Stop Camera" : "Start Camera"}
-                    </Button>
+                    <div className="text-center">
+                      <button
+                        onClick={toggleSystem}
+                        disabled={loading}
+                        className={`mt-4 ${
+                          systemActive ? 'bg-rose-600 hover:bg-rose-700' : 'bg-rose-500 hover:bg-rose-600'
+                        } text-white w-full sm:w-auto text-sm sm:text-base px-4 py-2 rounded flex items-center justify-center`}
+                      >
+                        <Camera className="w-3 h-3 sm:w-4 sm:h-4 mr-2" />
+                        {loading ? 'Processing...' : systemActive ? 'Stop System' : 'Start System'}
+                      </button>
+                      
+                      <p className={`mt-2 text-sm ${
+                        message.includes('error') || message.includes('fail') ? 'text-red-500' :
+                        message.includes('ready') ? 'text-blue-500' : 'text-green-500'
+                      }`}>
+                        {message}
+                      </p>
+                    </div>
                   </div>
 
                   <div className="text-center">
@@ -952,7 +1072,73 @@ export default function SpeechPractice() {
             </Card>
           </TabsContent>
 
-        
+          {/* Games */}
+          <TabsContent value="games">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
+              <Card className="border-rose-200 hover:shadow-lg transition-shadow">
+                <CardHeader className="bg-gradient-to-r from-pink-100 to-orange-100">
+                  <CardTitle className="text-rose-800 text-base sm:text-lg">🎈 Balloon Pop</CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 sm:p-6 text-center">
+                  <div className="text-3xl sm:text-4xl mb-4 min-h-[3rem] flex items-center justify-center flex-wrap">
+                    {balloons.join("")}
+                  </div>
+                  <p className="text-rose-600 mb-4 text-sm sm:text-base">Say any sound to pop balloons!</p>
+                  <Button
+                    className="bg-rose-500 hover:bg-rose-600 text-white mb-2 w-full sm:w-auto text-sm sm:text-base"
+                    onClick={popBalloon}
+                  >
+                    Pop Balloon!
+                  </Button>
+                  <div className="text-xs sm:text-sm text-rose-600">Balloons left: {balloons.length}</div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-rose-200 hover:shadow-lg transition-shadow">
+                <CardHeader className="bg-gradient-to-r from-pink-100 to-orange-100">
+                  <CardTitle className="text-rose-800 text-base sm:text-lg">🕯️ Candle Blow</CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 sm:p-6 text-center">
+                  <div className="text-3xl sm:text-4xl mb-4 min-h-[3rem] flex items-center justify-center">
+                    {candles.join(" ")}
+                  </div>
+                  <p className="text-rose-600 mb-4 text-sm sm:text-base">Blow out candles with your voice!</p>
+                  <Button
+                    className="bg-rose-500 hover:bg-rose-600 text-white mb-2 w-full sm:w-auto text-sm sm:text-base"
+                    onClick={blowCandle}
+                  >
+                    Blow Candle!
+                  </Button>
+                  <div className="text-xs sm:text-sm text-rose-600">Candles left: {candles.length}</div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-rose-200 hover:shadow-lg transition-shadow md:col-span-2 xl:col-span-1">
+                <CardHeader className="bg-gradient-to-r from-pink-100 to-orange-100">
+                  <CardTitle className="text-rose-800 text-base sm:text-lg">🌟 Sound Challenge</CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 sm:p-6 text-center">
+                  <div className="text-3xl sm:text-4xl mb-4">🎯</div>
+                  <p className="text-rose-600 mb-4 text-sm sm:text-base">Practice your target sounds!</p>
+                  <Button
+                    className="bg-rose-500 hover:bg-rose-600 text-white mb-2 w-full sm:w-auto text-sm sm:text-base"
+                    onClick={() => {
+                      setScore((prev) => prev + 10)
+                      setFeedback({
+                        type: "excellent",
+                        message: "🌟 Great job! +10 points!",
+                        show: true,
+                      })
+                      setTimeout(() => setFeedback((prev) => ({ ...prev, show: false })), 2000)
+                    }}
+                  >
+                    Start Challenge
+                  </Button>
+                  <div className="text-xs sm:text-sm text-rose-600">Current Score: {score}</div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
 
           {/* Storytelling */}
           <TabsContent value="stories">
