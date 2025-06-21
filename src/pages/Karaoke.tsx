@@ -104,6 +104,58 @@ const KaraokeTherapy: React.FC = () => {
   const animationFrameRef = useRef<number>()
   const audioRef = useRef<HTMLAudioElement>(new Audio())
   const recordingStartTimeRef = useRef<number>(0)
+  const useAudioPlayer = (url: string) => {
+  const { 
+    audioRef, 
+    isPlaying: audioPlaying, 
+    currentTime: audioCurrentTime,
+    play: audioPlay,
+    pause: audioPause
+  } = useAudioPlayer(currentSong.audioUrl);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+
+  useEffect(() => {
+    // Initialize audio element
+    audioRef.current = new Audio();
+    audioRef.current.src = url;
+    
+    const audio = audioRef.current;
+
+    const updateTime = () => setCurrentTime(audio.currentTime);
+    const handleEnd = () => setIsPlaying(false);
+    const handleError = () => console.error('Audio error:', audio.error);
+
+    audio.addEventListener('timeupdate', updateTime);
+    audio.addEventListener('ended', handleEnd);
+    audio.addEventListener('error', handleError);
+
+    return () => {
+      audio.pause();
+      audio.removeEventListener('timeupdate', updateTime);
+      audio.removeEventListener('ended', handleEnd);
+      audio.removeEventListener('error', handleError);
+    };
+  }, [url]);
+
+  const play = async () => {
+    if (!audioRef.current) return;
+    try {
+      await audioRef.current.play();
+      setIsPlaying(true);
+    } catch (error) {
+      console.error('Playback failed:', error);
+    }
+  };
+
+  const pause = () => {
+    if (!audioRef.current) return;
+    audioRef.current.pause();
+    setIsPlaying(false);
+  };
+
+  return { audioRef, isPlaying, currentTime, play, pause };
+};
 
   const songs: Song[] = [
     {
@@ -554,39 +606,14 @@ const KaraokeTherapy: React.FC = () => {
     }
   }, [currentSong])
 
- const handlePlayPause = useCallback(async () => {
-  const audio = audioRef.current;
-
-  if (isPlaying) {
-    audio.pause();
-    setIsPlaying(false);
-  } else {
-    try {
-      // Force reload if source changed
-      if (audio.src !== currentSong.audioUrl) {
-        audio.src = currentSong.audioUrl;
-        audio.load();
-        
-        // Wait for the audio to be ready
-        await new Promise((resolve, reject) => {
-          audio.oncanplaythrough = resolve;
-          audio.onerror = reject;
-        });
-      }
-      
-      await audio.play();
-      setIsPlaying(true);
-    } catch (error) {
-      console.error("Playback failed:", error);
-      setIsPlaying(false);
-      
-      // Additional error handling
-      if (error instanceof Error && error.message.includes("404")) {
-        console.error("Audio file not found at:", currentSong.audioUrl);
-      }
+  const handlePlayPause = useCallback(async () => {
+    if (audioPlaying) {
+      audioPause();
+    } else {
+      await audioPlay();
     }
-  }
-}, [isPlaying, currentSong]);
+  }, [audioPlaying, audioPause, audioPlay]);
+  
   useEffect(() => {
   const audio = audioRef.current;
 
@@ -604,18 +631,15 @@ const KaraokeTherapy: React.FC = () => {
 
   const handleRestart = useCallback(() => {
     if (audioRef.current) {
-      audioRef.current.currentTime = 0
-      if (isPlaying) {
-        audioRef.current.play().catch((error) => {
-          console.error("Playback failed:", error)
-        })
+      audioRef.current.currentTime = 0;
+      if (audioPlaying) {
+        audioPlay().catch(console.error);
       }
     }
-    setCurrentTime(0)
-    setScore(0)
-    setSpeechAnalysis(null)
-    setShowFeedback(false)
-  }, [isPlaying])
+    setScore(0);
+    setSpeechAnalysis(null);
+    setShowFeedback(false);
+  }, [audioRef, audioPlaying, audioPlay]);
 
   useEffect(() => {
     if (audioRef.current) {
