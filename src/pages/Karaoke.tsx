@@ -103,7 +103,7 @@ const KaraokeTherapy: React.FC = () => {
   const streamRef = useRef<MediaStream | null>(null)
   const animationFrameRef = useRef<number>()
   const audioRef = useRef<HTMLAudioElement>(new Audio())
-  const isMountedRef = useRef(true)
+
   const recordingStartTimeRef = useRef<number>(0)
 
   const songs: Song[] = [
