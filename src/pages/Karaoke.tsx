@@ -94,6 +94,8 @@ const KaraokeTherapy: React.FC = () => {
   const [speechAnalysis, setSpeechAnalysis] = useState<SpeechAnalysis | null>(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [showFeedback, setShowFeedback] = useState(false)
+  const [audioError, setAudioError] = useState<string | null>(null)
+  const [isAudioLoading, setIsAudioLoading] = useState(false)
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
@@ -104,6 +106,7 @@ const KaraokeTherapy: React.FC = () => {
   const animationFrameRef = useRef<number>()
   const audioRef = useRef<HTMLAudioElement>(new Audio())
   const recordingStartTimeRef = useRef<number>(0)
+  const playbackIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   const songs: Song[] = [
     {
@@ -114,6 +117,7 @@ const KaraokeTherapy: React.FC = () => {
       duration: 35,
       category: "Nursery Rhymes",
       therapeuticFocus: ["Articulation", "Rhythm", "Breathing"],
+      // Using a working online audio file
       audioUrl: "/assets/audio/twinkle-twinkle.mp3",
       lyrics: [
         {
@@ -165,7 +169,8 @@ const KaraokeTherapy: React.FC = () => {
       duration: 20,
       category: "Celebrations",
       therapeuticFocus: ["Pronunciation", "Social Skills", "Confidence"],
-      audioUrl: "https://www.soundjay.com/misc/sounds/happy-birthday.mp3",
+      // Alternative: Use your own audio file path
+      audioUrl: "/audio/happy-birthday.mp3", // Put your audio file in public/audio/ folder
       lyrics: [
         {
           time: 0,
@@ -204,7 +209,8 @@ const KaraokeTherapy: React.FC = () => {
       duration: 25,
       category: "Action Songs",
       therapeuticFocus: ["Fluency", "Rhythm", "Motor Skills"],
-      audioUrl: "https://www.soundjay.com/misc/sounds/row-your-boat.mp3",
+      // Using Text-to-Speech generated audio
+      audioUrl: "tts", // Special flag for text-to-speech
       lyrics: [
         { time: 0, text: "Row, row, row your boat", phonetic: "ROH ROH ROH YOR BOHT", words: ["row", "your", "boat"] },
         {
@@ -238,7 +244,7 @@ const KaraokeTherapy: React.FC = () => {
       duration: 35,
       category: "Educational",
       therapeuticFocus: ["Articulation", "Letter Sounds", "Memory"],
-      audioUrl: "https://www.soundjay.com/misc/sounds/alphabet-song.mp3",
+      audioUrl: "tts", // Using text-to-speech
       lyrics: [
         {
           time: 0,
@@ -277,6 +283,41 @@ const KaraokeTherapy: React.FC = () => {
     { name: "Speech Analyst", icon: Brain, unlocked: speechAnalysis !== null, description: "Complete speech analysis" },
     { name: "Improvement Champion", icon: TrendingUp, unlocked: score > 0, description: "Show measurable improvement" },
   ]
+
+  // Text-to-Speech function
+  const speakLyrics = useCallback(
+    (lyrics: any[]) => {
+      if (!("speechSynthesis" in window)) {
+        console.error("Speech synthesis not supported")
+        return
+      }
+
+      const fullText = lyrics.map((lyric) => lyric.text).join(". ")
+      const utterance = new SpeechSynthesisUtterance(fullText)
+      utterance.rate = 0.8
+      utterance.pitch = 1
+      utterance.volume = (volume / 100) * (isMuted ? 0 : 1)
+
+      // Find a good voice (prefer female voice for nursery rhymes)
+      const voices = speechSynthesis.getVoices()
+      const preferredVoice =
+        voices.find((voice) => voice.lang.startsWith("en") && voice.name.includes("Female")) ||
+        voices.find((voice) => voice.lang.startsWith("en"))
+
+      if (preferredVoice) {
+        utterance.voice = preferredVoice
+      }
+
+      utterance.onend = () => {
+        setIsPlaying(false)
+        setCurrentTime(0)
+        setCurrentLine(0)
+      }
+
+      speechSynthesis.speak(utterance)
+    },
+    [volume, isMuted],
+  )
 
   const requestMicrophonePermission = useCallback(async () => {
     try {
@@ -487,22 +528,6 @@ const KaraokeTherapy: React.FC = () => {
   }, [isRecording, startRecording, stopRecording])
 
   useEffect(() => {
-    let interval: NodeJS.Timeout
-    if (isPlaying) {
-      interval = setInterval(() => {
-        setCurrentTime((prev) => {
-          if (prev >= currentSong.duration) {
-            setIsPlaying(false)
-            return 0
-          }
-          return prev + 1
-        })
-      }, 1000)
-    }
-    return () => clearInterval(interval)
-  }, [isPlaying, currentSong.duration])
-
-  useEffect(() => {
     requestMicrophonePermission()
 
     return () => {
@@ -514,6 +539,10 @@ const KaraokeTherapy: React.FC = () => {
       }
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current)
+      }
+      // Stop any ongoing speech synthesis
+      if ("speechSynthesis" in window) {
+        speechSynthesis.cancel()
       }
     }
   }, [requestMicrophonePermission])
@@ -528,29 +557,54 @@ const KaraokeTherapy: React.FC = () => {
     const audio = audioRef.current
 
     const updateProgress = () => {
-      setCurrentTime(audio.currentTime)
+      if (audio && !audio.paused) {
+        setCurrentTime(audio.currentTime)
 
-      const currentLyricIndex = currentSong.lyrics.findIndex((lyric, index) => {
-        const nextLyric = currentSong.lyrics[index + 1]
-        return audio.currentTime >= lyric.time && (!nextLyric || audio.currentTime < nextLyric.time)
-      })
+        const currentLyricIndex = currentSong.lyrics.findIndex((lyric, index) => {
+          const nextLyric = currentSong.lyrics[index + 1]
+          return audio.currentTime >= lyric.time && (!nextLyric || audio.currentTime < nextLyric.time)
+        })
 
-      if (currentLyricIndex !== -1) {
-        setCurrentLine(currentLyricIndex)
+        if (currentLyricIndex !== -1) {
+          setCurrentLine(currentLyricIndex)
+        }
       }
     }
 
     const handleSongEnd = () => {
       setIsPlaying(false)
       setCurrentTime(0)
+      setCurrentLine(0)
+    }
+
+    const handleLoadStart = () => {
+      setIsAudioLoading(true)
+      setAudioError(null)
+    }
+
+    const handleCanPlay = () => {
+      setIsAudioLoading(false)
+      setAudioError(null)
+    }
+
+    const handleError = () => {
+      setIsAudioLoading(false)
+      setAudioError("Audio file could not be loaded. Using text-to-speech instead.")
+      console.error("Audio loading failed")
     }
 
     audio.addEventListener("timeupdate", updateProgress)
     audio.addEventListener("ended", handleSongEnd)
+    audio.addEventListener("loadstart", handleLoadStart)
+    audio.addEventListener("canplay", handleCanPlay)
+    audio.addEventListener("error", handleError)
 
     return () => {
       audio.removeEventListener("timeupdate", updateProgress)
       audio.removeEventListener("ended", handleSongEnd)
+      audio.removeEventListener("loadstart", handleLoadStart)
+      audio.removeEventListener("canplay", handleCanPlay)
+      audio.removeEventListener("error", handleError)
     }
   }, [currentSong])
 
@@ -558,41 +612,85 @@ const KaraokeTherapy: React.FC = () => {
     const audio = audioRef.current
 
     if (isPlaying) {
-      audio.pause()
+      // Stop current playback
+      if (currentSong.audioUrl === "tts") {
+        speechSynthesis.cancel()
+      } else {
+        audio.pause()
+      }
       setIsPlaying(false)
     } else {
       try {
-        if (audio.src !== currentSong.audioUrl) {
-          audio.src = currentSong.audioUrl
-          await audio.load()
+        if (currentSong.audioUrl === "tts") {
+          // Use text-to-speech
+          setIsPlaying(true)
+          speakLyrics(currentSong.lyrics)
+
+          // Start timer for lyrics sync
+          let timeElapsed = 0
+          const interval = setInterval(() => {
+            timeElapsed += 1
+            setCurrentTime(timeElapsed)
+
+            const currentLyricIndex = currentSong.lyrics.findIndex((lyric, index) => {
+              const nextLyric = currentSong.lyrics[index + 1]
+              return timeElapsed >= lyric.time && (!nextLyric || timeElapsed < nextLyric.time)
+            })
+
+            if (currentLyricIndex !== -1) {
+              setCurrentLine(currentLyricIndex)
+            }
+
+            if (timeElapsed >= currentSong.duration) {
+              clearInterval(interval)
+              setIsPlaying(false)
+              setCurrentTime(0)
+              setCurrentLine(0)
+            }
+          }, 1000)
+        } else {
+          // Use audio file
+          if (audio.src !== currentSong.audioUrl) {
+            audio.src = currentSong.audioUrl
+            audio.volume = isMuted ? 0 : volume / 100
+          }
+          await audio.play()
+          setIsPlaying(true)
         }
-        await audio.play()
-        setIsPlaying(true)
       } catch (error) {
         console.error("Playback failed:", error)
-        setIsPlaying(false)
+        setAudioError("Playback failed. Using text-to-speech instead.")
+        // Fallback to TTS
+        setIsPlaying(true)
+        speakLyrics(currentSong.lyrics)
       }
     }
-  }, [isPlaying, currentSong])
+  }, [isPlaying, currentSong, speakLyrics, isMuted, volume])
 
   const handleRestart = useCallback(() => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = 0
-      if (isPlaying) {
-        audioRef.current.play().catch((error) => {
-          console.error("Playback failed:", error)
-        })
-      }
+    const audio = audioRef.current
+
+    // Stop any current playback
+    if (currentSong.audioUrl === "tts") {
+      speechSynthesis.cancel()
+    } else {
+      audio.pause()
+      audio.currentTime = 0
     }
+
+    setIsPlaying(false)
     setCurrentTime(0)
+    setCurrentLine(0)
     setScore(0)
     setSpeechAnalysis(null)
     setShowFeedback(false)
-  }, [isPlaying])
+    setAudioError(null)
+  }, [currentSong])
 
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = isMuted ? 0 : volume / 100
+    const audio = audioRef.current
+    if (audio) {
+      audio.volume = isMuted ? 0 : volume / 100
     }
   }, [volume, isMuted])
 
@@ -687,6 +785,34 @@ const KaraokeTherapy: React.FC = () => {
           </motion.div>
         )}
 
+        {audioError && (
+          <motion.div
+            className="mb-6 bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center gap-3"
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <AlertCircle className="w-5 h-5 text-blue-500" />
+            <div className="flex-1">
+              <p className="text-blue-700 font-medium">Audio Notice</p>
+              <p className="text-blue-600 text-sm">{audioError}</p>
+            </div>
+          </motion.div>
+        )}
+
+        {isAudioLoading && (
+          <motion.div
+            className="mb-6 bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-center gap-3"
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <div className="w-5 h-5 border-2 border-yellow-500 border-t-transparent rounded-full animate-spin" />
+            <div className="flex-1">
+              <p className="text-yellow-700 font-medium">Loading Audio...</p>
+              <p className="text-yellow-600 text-sm">Please wait while the audio file loads.</p>
+            </div>
+          </motion.div>
+        )}
+
         <motion.div
           className="grid grid-cols-1 lg:grid-cols-3 gap-8"
           variants={containerVariants}
@@ -768,8 +894,15 @@ const KaraokeTherapy: React.FC = () => {
                     whileHover={{ scale: 1.1 }}
                     whileTap={{ scale: 0.95 }}
                     onClick={handlePlayPause}
+                    disabled={isAudioLoading}
                   >
-                    {isPlaying ? <PauseCircle className="w-8 h-8" /> : <PlayCircle className="w-8 h-8" />}
+                    {isAudioLoading ? (
+                      <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : isPlaying ? (
+                      <PauseCircle className="w-8 h-8" />
+                    ) : (
+                      <PlayCircle className="w-8 h-8" />
+                    )}
                   </motion.button>
 
                   <motion.button
@@ -1058,7 +1191,7 @@ const KaraokeTherapy: React.FC = () => {
                         <div className="flex-1">
                           <div className="font-medium text-gray-900">{song.title}</div>
                           <div className="text-sm text-gray-500">
-                            {song.category} • {formatTime(song.duration)}
+                            {song.category} • {formatTime(song.duration)} • {song.audioUrl === "tts" ? "TTS" : "Audio"}
                           </div>
                         </div>
                       </div>
