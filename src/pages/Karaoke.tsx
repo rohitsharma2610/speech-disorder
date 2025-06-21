@@ -106,7 +106,7 @@ const KaraokeTherapy: React.FC = () => {
   const animationFrameRef = useRef<number>()
   const audioRef = useRef<HTMLAudioElement>(new Audio())
   const recordingStartTimeRef = useRef<number>(0)
-  const playbackIntervalRef = useRef<NodeJS.Timeout | null>(null)
+
 
   const songs: Song[] = [
     {
