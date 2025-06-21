@@ -9,29 +9,42 @@ import numpy as np
 import time
 import threading
 import os
+import logging
 
 class Karen:
-    def _init_(self):
-        # Initialize text-to-speech engine
-        self.engine = pyttsx3.init()
-        voices = self.engine.getProperty('voices')
-        self.engine.setProperty('voice', voices[1].id)
-        self.engine.setProperty('rate', 150)
+    def __init__(self):
+        # Initialize logging
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger("Karen")
+        
+        # Initialize text-to-speech engine with error handling
+        try:
+            self.engine = pyttsx3.init()
+            voices = self.engine.getProperty('voices')
+            if len(voices) > 1:
+                self.engine.setProperty('voice', voices[1].id)
+            self.engine.setProperty('rate', 150)
+            self.logger.info("TTS engine initialized successfully")
+        except Exception as e:
+            self.logger.error(f"Error initializing TTS engine: {e}")
+            raise RuntimeError("Could not initialize text-to-speech engine")
 
         # Initialize speech recognizer
         self.recognizer = sr.Recognizer()
-        self.microphone = sr.Microphone()
+        try:
+            self.microphone = sr.Microphone()
+            self.logger.info("Microphone initialized successfully")
+        except Exception as e:
+            self.logger.error(f"Error initializing microphone: {e}")
+            raise RuntimeError("Could not initialize microphone")
 
-        # Initialize camera
-        self.cap = cv2.VideoCapture(0)
-        if not self.cap.isOpened():
-            raise RuntimeError("Could not open camera")
+        # Initialize camera with Windows-specific backend
+        self.cap = None
+        self.initialize_camera()
 
-        # Load mouth cascade (using a more reliable approach)
-        cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_smile.xml')
-        self.mouth_cascade = cv2.CascadeClassifier(cascade_path)
-        if self.mouth_cascade.empty():
-            raise RuntimeError("Could not load mouth cascade classifier")
+        # Load mouth cascade with fallback
+        self.mouth_cascade = None
+        self.initialize_mouth_cascade()
 
         # Animal-image mapping
         self.animal_images = {
@@ -50,146 +63,235 @@ class Karen:
         self.show_feedback = False
         self.feedback_timeout = 0
         self.running = True
+        self.interaction_active = True
+        self.lock = threading.Lock()
 
-        # Start camera thread
-        self.camera_thread = threading.Thread(target=self.camera_loop)
-        self.camera_thread.daemon = True
-        self.camera_thread.start()
+        # Start camera thread if camera is available
+        if self.cap is not None:
+            self.camera_thread = threading.Thread(target=self.camera_loop)
+            self.camera_thread.daemon = True
+            self.camera_thread.start()
+            self.logger.info("Camera thread started")
+
+    def initialize_camera(self):
+        """Initialize camera with Windows-specific backend and retries"""
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                # Try different backends
+                backends = [cv2.CAP_DSHOW, cv2.CAP_ANY]
+                for backend in backends:
+                    try:
+                        self.cap = cv2.VideoCapture(0, backend)
+                        if self.cap.isOpened():
+                            break
+                    except:
+                        continue
+                
+                if not self.cap or not self.cap.isOpened():
+                    self.logger.warning("Could not open camera - running in audio-only mode")
+                    self.cap = None
+                    self.lip_movement_detected = True  # Bypass lip sync check
+                    return
+                
+                # Configure camera settings
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                self.cap.set(cv2.CAP_PROP_FPS, 30)
+                self.logger.info("Camera initialized successfully")
+                return
+                
+            except Exception as e:
+                self.logger.error(f"Camera initialization attempt {attempt + 1} failed: {e}")
+                if attempt == max_attempts - 1:
+                    self.logger.warning("Giving up on camera initialization")
+                    self.cap = None
+                    self.lip_movement_detected = True
+                time.sleep(1)
+
+    def initialize_mouth_cascade(self):
+        """Initialize mouth cascade classifier with fallback"""
+        try:
+            cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_smile.xml')
+            if os.path.exists(cascade_path):
+                self.mouth_cascade = cv2.CascadeClassifier(cascade_path)
+                if self.mouth_cascade.empty():
+                    self.logger.warning("Could not load mouth cascade - lip sync detection disabled")
+                    self.mouth_cascade = None
+                else:
+                    self.logger.info("Mouth cascade loaded successfully")
+        except Exception as e:
+            self.logger.error(f"Error loading mouth cascade: {e}")
+            self.mouth_cascade = None
 
     def camera_loop(self):
-        while self.running:
-            ret, frame = self.cap.read()
-            if not ret:
-                print("Failed to capture frame")
-                break
+        """Camera processing loop with robust error handling"""
+        while self.running and self.cap is not None and self.cap.isOpened():
+            try:
+                ret, frame = self.cap.read()
+                if not ret:
+                    self.logger.warning("Failed to capture frame - retrying...")
+                    time.sleep(0.1)
+                    continue
 
-            # Flip frame horizontally for mirror effect
-            frame = cv2.flip(frame, 1)
-            
-            # Convert to grayscale for detection
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            
-            # Detect mouths in the image
-            mouths = self.mouth_cascade.detectMultiScale(
-                gray,
-                scaleFactor=1.1,
-                minNeighbors=5,
-                minSize=(30, 30),
-                flags=cv2.CASCADE_SCALE_IMAGE
-            )
-            
-            self.lip_movement_detected = len(mouths) > 0
-
-            # Draw rectangles around the mouths
-            for (x, y, w, h) in mouths:
-                # Only consider detections in the lower half of the face
-                if y > frame.shape[0] // 2:
-                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                    self.lip_movement_detected = True
-
-            # Display feedback if needed
-            if self.show_feedback:
-                cv2.putText(frame, self.feedback_text, (50, 50),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                # Flip frame horizontally for mirror effect
+                frame = cv2.flip(frame, 1)
                 
-                # Check if feedback should timeout
-                if time.time() > self.feedback_timeout:
-                    self.show_feedback = False
+                # Mouth detection only if cascade is loaded
+                if self.mouth_cascade is not None:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    mouths = self.mouth_cascade.detectMultiScale(
+                        gray,
+                        scaleFactor=1.1,
+                        minNeighbors=5,
+                        minSize=(30, 30),
+                        flags=cv2.CASCADE_SCALE_IMAGE
+                    )
+                    
+                    self.lip_movement_detected = len(mouths) > 0
 
-            # Display the resulting frame
-            cv2.imshow('Karen - Lip Sync Recognition', frame)
-            
-            # Break the loop if 'q' is pressed
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                self.running = False
-                break
+                    # Draw rectangles around the mouths
+                    for (x, y, w, h) in mouths:
+                        if y > frame.shape[0] // 2:  # Lower half of face
+                            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                else:
+                    self.lip_movement_detected = True  # Bypass if no cascade
 
-        # Release the capture when done
-        self.cap.release()
+                # Display feedback if needed
+                if self.show_feedback:
+                    cv2.putText(frame, self.feedback_text, (50, 50),
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                    
+                    # Check if feedback should timeout
+                    if time.time() > self.feedback_timeout:
+                        self.show_feedback = False
+
+                # Display the frame
+                cv2.imshow('Karen - Lip Sync Recognition', frame)
+                
+                # Exit on 'q' key
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    self.running = False
+                    break
+
+            except Exception as e:
+                self.logger.error(f"Camera loop error: {e}")
+                time.sleep(0.1)
+
+        # Clean up
+        if self.cap is not None:
+            self.cap.release()
         cv2.destroyAllWindows()
+        self.logger.info("Camera loop ended")
 
     def speak(self, text):
-        """Convert text to speech"""
-        print(f"Karen: {text}")
-        self.engine.say(text)
-        self.engine.runAndWait()
-        
+        """Convert text to speech with error handling"""
+        try:
+            self.logger.info(f"Speaking: {text}")
+            self.engine.say(text)
+            self.engine.runAndWait()
+        except Exception as e:
+            self.logger.error(f"Error in speech synthesis: {e}")
+
     def listen(self):
-        """Listen for voice commands with improved recognition"""
-        with self.microphone as source:
-            print("Listening...")
-            self.recognizer.adjust_for_ambient_noise(source, duration=1)
-            
-            try:
-                audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=3)
-                print("Processing your speech...")
+        """Listen for voice commands with improved recognition and error handling"""
+        try:
+            with self.microphone as source:
+                self.logger.info("Listening...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=1)
                 
-                # Try Google Speech Recognition with show_all=True for alternatives
-                result = self.recognizer.recognize_google(audio, show_all=True)
-                
-                if isinstance(result, dict) and 'alternative' in result:
-                    # Get all possible transcriptions
-                    alternatives = [alt['transcript'].lower() for alt in result['alternative']]
-                    print(f"Possible matches: {alternatives}")
+                try:
+                    audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=3)
+                    self.logger.info("Processing your speech...")
                     
-                    # Check if any alternative matches our expected word
-                    if self.expected_word:
-                        for alt in alternatives:
-                            if self.expected_word in alt:
-                                print(f"Matched expected word: {self.expected_word}")
-                                return self.expected_word
+                    result = self.recognizer.recognize_google(audio, show_all=True)
                     
-                    # Return the most confident result
-                    return alternatives[0]
-                
-                elif isinstance(result, str):
-                    return result.lower()
-                
-                return None
-                
-            except sr.WaitTimeoutError:
-                print("Listening timed out")
-                return None
-            except sr.UnknownValueError:
-                print("Could not understand audio")
-                self.speak("Sorry, I didn't catch that. Could you repeat?")
-                return None
-            except sr.RequestError as e:
-                print(f"Recognition error: {e}")
-                self.speak("Sorry, my speech service is down. Please try again later.")
-                return None
-            except Exception as e:
-                print(f"Unexpected error: {e}")
-                return None
-            
+                    if isinstance(result, dict) and 'alternative' in result:
+                        alternatives = [alt['transcript'].lower() for alt in result['alternative']]
+                        self.logger.info(f"Possible matches: {alternatives}")
+                        
+                        if self.expected_word:
+                            for alt in alternatives:
+                                if self.expected_word in alt:
+                                    self.logger.info(f"Matched expected word: {self.expected_word}")
+                                    return self.expected_word
+                        
+                        return alternatives[0] if alternatives else None
+                    
+                    elif isinstance(result, str):
+                        return result.lower()
+                    
+                    return None
+                    
+                except sr.WaitTimeoutError:
+                    self.logger.warning("Listening timed out")
+                    return None
+                except sr.UnknownValueError:
+                    self.logger.warning("Could not understand audio")
+                    self.speak("Sorry, I didn't catch that. Could you repeat?")
+                    return None
+                except sr.RequestError as e:
+                    self.logger.error(f"Recognition error: {e}")
+                    self.speak("Sorry, my speech service is down. Please try again later.")
+                    return None
+        except Exception as e:
+            self.logger.error(f"Error in listen(): {e}")
+            return None
+
     def show_image(self, animal):
-        """Display image of the specified animal"""
+        """Display image of the specified animal with error handling"""
         if animal in self.animal_images:
             try:
-                response = requests.get(self.animal_images[animal], stream=True)
+                self.logger.info(f"Fetching image for {animal}")
+                response = requests.get(self.animal_images[animal], stream=True, timeout=5)
                 response.raise_for_status()
                 
                 img = Image.open(BytesIO(response.content))
                 
-                # Create a new figure with a specified size
                 plt.figure(figsize=(10, 8))
                 plt.imshow(img)
                 plt.axis('off')
                 plt.title(animal.capitalize(), pad=20, fontsize=14)
-                
-                # Adjust layout to prevent cutting off
                 plt.tight_layout()
-                
-                # Use a non-blocking show
                 plt.show(block=False)
-                plt.pause(0.1)  # Small pause to allow the window to appear
+                plt.pause(0.1)
                 
                 self.speak(f"Here is the image of {animal} you requested.")
+            except requests.exceptions.RequestException as e:
+                self.logger.error(f"Network error loading image: {e}")
+                self.speak(f"Sorry, I couldn't load the image of {animal}. Please check your internet connection.")
             except Exception as e:
-                print(f"Error loading image: {e}")
-                self.speak(f"Sorry, I couldn't load the image of {animal}.")
+                self.logger.error(f"Error loading image: {e}")
+                self.speak(f"Sorry, I couldn't display the image of {animal}.")
         else:
+            self.logger.warning(f"No image available for {animal}")
             self.speak(f"I don't have an image for {animal}. Try another animal.")
+
+    def stop_interaction(self):
+        """Stop all running processes"""
+        with self.lock:
+            self.logger.info("Stopping interaction...")
+            self.running = False
+            self.interaction_active = False
+            
+            # Stop speech synthesis if it's running
+            if hasattr(self, 'engine'):
+                self.engine.stop()
+            
+            # Release camera resources
+            if hasattr(self, 'cap') and self.cap is not None:
+                self.cap.release()
+            
+            # Close all OpenCV windows
+            cv2.destroyAllWindows()
+            
+            # Close matplotlib figures
+            plt.close('all')
+            self.logger.info("Interaction stopped")
+
+    def cleanup(self):
+        """Clean up resources"""
+        self.stop_interaction()
 
     def check_pronunciation(self, command):
         """Check pronunciation with improved feedback"""
@@ -197,80 +299,95 @@ class Karen:
             self.feedback_text = "I didn't hear anything. Please try again."
             self.show_feedback = True
             self.feedback_timeout = time.time() + 3
+            self.logger.info("No command received")
             return False
 
-        if not self.lip_movement_detected:
+        if not self.lip_movement_detected and self.cap is not None:
             self.feedback_text = "I didn't see your lips moving. Please face the camera and speak clearly."
             self.show_feedback = True
             self.feedback_timeout = time.time() + 3
+            self.logger.info("No lip movement detected")
             return False
 
         if command == self.expected_word:
             self.feedback_text = "Perfect! Your pronunciation was correct."
             self.show_feedback = True
             self.feedback_timeout = time.time() + 3
+            self.logger.info(f"Correct pronunciation: {command}")
             return True
         else:
-            # Give more specific feedback
             self.feedback_text = (f"Almost there! You said '{command}' but expected '{self.expected_word}'. "
                                 f"Try emphasizing the sounds in '{self.expected_word}'.")
             self.show_feedback = True
             self.feedback_timeout = time.time() + 4
+            self.logger.info(f"Incorrect pronunciation. Expected: {self.expected_word}, Got: {command}")
             return False
 
     def run(self):
-        """Main interaction loop"""
-        self.speak("Hello! I'm Karen. Let's practice pronunciation together.")
-        
         try:
-            while self.running:
-                self.speak("Which animal would you like to see? You can say rabbit, lion, rainbow, snake, lemon, or tiger.")
-                
-                # Get initial command
-                command = self.listen()
-                
-                if not command:
+            self.speak("Hello! I'm Karen. Let's practice pronunciation together.")
+            self.logger.info("Starting main interaction loop")
+            
+            while self.running and self.interaction_active:
+                try:
+                    # Animal selection prompt
+                    self.speak("Which animal would you like to see? You can say rabbit, lion, rainbow, snake, lemon, or tiger.")
+                    
+                    # Listen for command with timeout
+                    command = None
+                    start_time = time.time()
+                    while time.time() - start_time < 30:  # 30-second timeout
+                        command = self.listen()
+                        if command is not None:
+                            break
+                        time.sleep(0.1)
+                    
+                    if not command:
+                        self.logger.warning("No command received within timeout")
+                        continue
+                        
+                    if any(word in command for word in ['exit', 'quit', 'stop']):
+                        self.speak("Goodbye! It was nice practicing with you.")
+                        self.running = False
+                        break
+
+                    # Process animal command
+                    for animal in self.animal_images.keys():
+                        if animal in command:
+                            self.expected_word = animal
+                            self.speak(f"Great! Now please say the word '{animal}' clearly while facing the camera.")
+                            
+                            # Pronunciation check
+                            pronunciation_check = None
+                            start_time = time.time()
+                            while time.time() - start_time < 30:  # 30-second timeout
+                                pronunciation_check = self.listen()
+                                if pronunciation_check is not None:
+                                    break
+                                time.sleep(0.1)
+                            
+                            if pronunciation_check:
+                                correct = self.check_pronunciation(pronunciation_check)
+                                if correct:
+                                    self.show_image(animal)
+                                    time.sleep(2)  # Show image for 2 seconds
+                            break
+                    else:
+                        self.speak("I didn't recognize that animal. Please try again.")
+                        
+                except Exception as e:
+                    self.logger.error(f"Error in interaction cycle: {e}")
                     continue
                     
-                if 'exit' in command or 'quit' in command or 'stop' in command:
-                    self.speak("Goodbye! It was nice practicing with you.")
-                    self.running = False
-                    break
-
-                # Check for animal names
-                for animal in self.animal_images.keys():
-                    if animal in command:
-                        self.expected_word = animal
-                        
-                        # Give clear instructions
-                        self.speak(f"Great! Now please say the word '{animal}' clearly while facing the camera. "
-                                 "Make sure I can see your lips moving.")
-                        
-                        # Wait a moment before listening again
-                        time.sleep(1)
-                        
-                        # Get pronunciation attempt
-                        pronunciation_check = self.listen()
-                        
-                        if pronunciation_check:
-                            correct = self.check_pronunciation(pronunciation_check)
-                            if correct:
-                                self.show_image(animal)
-                                time.sleep(2)  # Give time to view the image
-                        break
-                else:
-                    self.speak("I didn't recognize that animal. Please try again.")
-                    
         except KeyboardInterrupt:
-            print("\nExiting...")
+            self.logger.info("Keyboard interrupt received")
+        except Exception as e:
+            self.logger.error(f"Fatal error in run(): {e}")
         finally:
-            self.running = False
-            self.cap.release()
-            cv2.destroyAllWindows()
-            plt.close('all')
+            self.cleanup()
+            self.logger.info("Main interaction loop ended")
 
-
-if __name__ == "_main_":
+if __name__ == "__main__":
     try:
         karen = Karen()
         karen.run()
