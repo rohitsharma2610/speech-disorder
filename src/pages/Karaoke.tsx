@@ -50,14 +50,6 @@ interface AudioData {
   duration: number
 }
 
-interface AudioPlayerReturn {
-  audioRef: React.RefObject<HTMLAudioElement>;
-  isPlaying: boolean;
-  currentTime: number;
-  play: () => Promise<void>;
-  pause: () => void;
-}
-
 interface Song {
   id: number
   title: string
@@ -111,69 +103,8 @@ const KaraokeTherapy: React.FC = () => {
   const streamRef = useRef<MediaStream | null>(null)
   const animationFrameRef = useRef<number>()
   const audioRef = useRef<HTMLAudioElement>(new Audio())
+  const isMountedRef = useRef(true)
   const recordingStartTimeRef = useRef<number>(0)
-  const useAudioPlayer = (url: string) => {
-  const { 
-    audioRef, 
-    isPlaying: audioPlaying, 
-    currentTime: audioCurrentTime,
-    play: audioPlay,
-    pause: audioPause
-  } = useAudioPlayer(currentSong.audioUrl);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-
-const useAudioPlayer = (url: string): AudioPlayerReturn => {
-  const audioRef = useRef<HTMLAudioElement>(new Audio());
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [currentTime, setCurrentTime] = useState<number>(0);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    audio.src = url;
-    
-    const updateTime = () => setCurrentTime(audio.currentTime);
-    const handleEnd = () => setIsPlaying(false);
-    const handleError = () => console.error('Audio error:', audio.error);
-
-    audio.addEventListener('timeupdate', updateTime);
-    audio.addEventListener('ended', handleEnd);
-    audio.addEventListener('error', handleError);
-
-    return () => {
-      audio.pause();
-      audio.removeEventListener('timeupdate', updateTime);
-      audio.removeEventListener('ended', handleEnd);
-      audio.removeEventListener('error', handleError);
-    };
-  }, [url]);
-
-  const play = async (): Promise<void> => {
-    if (!audioRef.current) return;
-    try {
-      await audioRef.current.play();
-      setIsPlaying(true);
-    } catch (error) {
-      console.error('Playback failed:', error);
-    }
-  };
-
-  const pause = (): void => {
-    if (!audioRef.current) return;
-    audioRef.current.pause();
-    setIsPlaying(false);
-  };
-
-  return { audioRef, isPlaying, currentTime, play, pause };
-};
-  const pause = () => {
-    if (!audioRef.current) return;
-    audioRef.current.pause();
-    setIsPlaying(false);
-  };
-
-  return { audioRef, isPlaying, currentTime, play, pause };
-};
 
   const songs: Song[] = [
     {
@@ -408,7 +339,7 @@ const useAudioPlayer = (url: string): AudioPlayerReturn => {
   }, [isRecording])
 
   const analyzeSpeech = useCallback(
-    async (expectedLyrics: any[]): Promise<SpeechAnalysis> => {
+    async (recordingBlob: Blob, expectedLyrics: any[]): Promise<SpeechAnalysis> => {
       setIsAnalyzing(true)
 
       await new Promise((resolve) => setTimeout(resolve, 2000))
@@ -520,7 +451,7 @@ const useAudioPlayer = (url: string): AudioPlayerReturn => {
 
         setRecordedAudio(audioData)
 
-        const analysis = await analyzeSpeech(currentSong.lyrics)
+        const analysis = await analyzeSpeech(recordingBlob, currentSong.lyrics)
         setSpeechAnalysis(analysis)
         setScore(analysis.overallScore)
         setShowFeedback(true)
@@ -625,39 +556,40 @@ const useAudioPlayer = (url: string): AudioPlayerReturn => {
   }, [currentSong])
 
   const handlePlayPause = useCallback(async () => {
-    if (audioPlaying) {
-      audioPause();
+    const audio = audioRef.current
+
+    if (isPlaying) {
+      audio.pause()
+      setIsPlaying(false)
     } else {
-      await audioPlay();
+      try {
+        if (audio.src !== currentSong.audioUrl) {
+          audio.src = currentSong.audioUrl
+          await audio.load()
+        }
+        await audio.play()
+        setIsPlaying(true)
+      } catch (error) {
+        console.error("Playback failed:", error)
+        setIsPlaying(false)
+      }
     }
-  }, [audioPlaying, audioPause, audioPlay]);
-  useEffect(() => {
-  const audio = audioRef.current;
-
-  const handleError = () => {
-    console.error("Audio error:", audio.error);
-    setIsPlaying(false);
-  };
-
-  audio.addEventListener('error', handleError);
-
-  return () => {
-    audio.removeEventListener('error', handleError);
-  };
-}, []);
+  }, [isPlaying, currentSong])
 
   const handleRestart = useCallback(() => {
     if (audioRef.current) {
-      audioRef.current.currentTime = 0;
-      setCurrentTime(0);
-      if (audioPlaying) {
-        audioPlay().catch(console.error);
+      audioRef.current.currentTime = 0
+      if (isPlaying) {
+        audioRef.current.play().catch((error) => {
+          console.error("Playback failed:", error)
+        })
       }
     }
-    setScore(0);
-    setSpeechAnalysis(null);
-    setShowFeedback(false);
-  }, [audioRef, audioPlaying, audioPlay]);
+    setCurrentTime(0)
+    setScore(0)
+    setSpeechAnalysis(null)
+    setShowFeedback(false)
+  }, [isPlaying])
 
   useEffect(() => {
     if (audioRef.current) {
@@ -699,7 +631,6 @@ const useAudioPlayer = (url: string): AudioPlayerReturn => {
       },
     },
   }
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-pink-50 via-orange-50 to-rose-50 p-4 md:p-6 lg:p-8">
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
