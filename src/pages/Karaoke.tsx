@@ -631,6 +631,7 @@ const KaraokeTherapy: React.FC = () => {
       },
     },
   }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-pink-50 via-orange-50 to-rose-50 p-4 md:p-6 lg:p-8">
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
