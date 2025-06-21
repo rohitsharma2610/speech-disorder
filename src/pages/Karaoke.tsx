@@ -50,6 +50,14 @@ interface AudioData {
   duration: number
 }
 
+interface AudioPlayerReturn {
+  audioRef: React.RefObject<HTMLAudioElement>;
+  isPlaying: boolean;
+  currentTime: number;
+  play: () => Promise<void>;
+  pause: () => void;
+}
+
 interface Song {
   id: number
   title: string
@@ -115,13 +123,15 @@ const KaraokeTherapy: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
 
-  useEffect(() => {
-    // Initialize audio element
-    audioRef.current = new Audio();
-    audioRef.current.src = url;
-    
-    const audio = audioRef.current;
+const useAudioPlayer = (url: string): AudioPlayerReturn => {
+  const audioRef = useRef<HTMLAudioElement>(new Audio());
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [currentTime, setCurrentTime] = useState<number>(0);
 
+  useEffect(() => {
+    const audio = audioRef.current;
+    audio.src = url;
+    
     const updateTime = () => setCurrentTime(audio.currentTime);
     const handleEnd = () => setIsPlaying(false);
     const handleError = () => console.error('Audio error:', audio.error);
@@ -138,7 +148,7 @@ const KaraokeTherapy: React.FC = () => {
     };
   }, [url]);
 
-  const play = async () => {
+  const play = async (): Promise<void> => {
     if (!audioRef.current) return;
     try {
       await audioRef.current.play();
@@ -148,6 +158,14 @@ const KaraokeTherapy: React.FC = () => {
     }
   };
 
+  const pause = (): void => {
+    if (!audioRef.current) return;
+    audioRef.current.pause();
+    setIsPlaying(false);
+  };
+
+  return { audioRef, isPlaying, currentTime, play, pause };
+};
   const pause = () => {
     if (!audioRef.current) return;
     audioRef.current.pause();
@@ -613,7 +631,6 @@ const KaraokeTherapy: React.FC = () => {
       await audioPlay();
     }
   }, [audioPlaying, audioPause, audioPlay]);
-  
   useEffect(() => {
   const audio = audioRef.current;
 
@@ -632,6 +649,7 @@ const KaraokeTherapy: React.FC = () => {
   const handleRestart = useCallback(() => {
     if (audioRef.current) {
       audioRef.current.currentTime = 0;
+      setCurrentTime(0);
       if (audioPlaying) {
         audioPlay().catch(console.error);
       }
