@@ -103,7 +103,6 @@ const KaraokeTherapy: React.FC = () => {
   const streamRef = useRef<MediaStream | null>(null)
   const animationFrameRef = useRef<number>()
   const audioRef = useRef<HTMLAudioElement>(new Audio())
-
   const recordingStartTimeRef = useRef<number>(0)
 
   const songs: Song[] = [
@@ -339,7 +338,7 @@ const KaraokeTherapy: React.FC = () => {
   }, [isRecording])
 
   const analyzeSpeech = useCallback(
-    async (recordingBlob: Blob, expectedLyrics: any[]): Promise<SpeechAnalysis> => {
+    async (expectedLyrics: any[]): Promise<SpeechAnalysis> => {
       setIsAnalyzing(true)
 
       await new Promise((resolve) => setTimeout(resolve, 2000))
@@ -451,7 +450,7 @@ const KaraokeTherapy: React.FC = () => {
 
         setRecordedAudio(audioData)
 
-        const analysis = await analyzeSpeech(recordingBlob, currentSong.lyrics)
+        const analysis = await analyzeSpeech(currentSong.lyrics)
         setSpeechAnalysis(analysis)
         setScore(analysis.overallScore)
         setShowFeedback(true)
