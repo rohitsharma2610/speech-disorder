@@ -28,14 +28,13 @@ import axios from "axios"
 
 // Create axios instance with timeout
 const api = axios.create({
-  baseURL: 'http://localhost:5000',
-  timeout: 1550000 // 5 second timeout
-});
+  baseURL: "http://localhost:5000",
+  timeout: 15000, // 15 second timeout
+})
 
-// Sample data for practice
+// Sample data for practice - matching Karen's animals
 const articulationWords = [
   { word: "rabbit", emoji: "🐰", sound: "/r/", difficulty: "easy", tips: "Round your lips and lift your tongue tip" },
-  { word: "sun", emoji: "☀️", sound: "/s/", difficulty: "easy", tips: "Keep your tongue behind your teeth" },
   {
     word: "lion",
     emoji: "🦁",
@@ -43,6 +42,9 @@ const articulationWords = [
     difficulty: "medium",
     tips: "Touch your tongue to the roof of your mouth",
   },
+  { word: "tiger", emoji: "🐅", sound: "/t/", difficulty: "medium", tips: "Touch your tongue tip to your teeth ridge" },
+  { word: "snake", emoji: "🐍", sound: "/s/", difficulty: "medium", tips: "Make a long, clear S sound like a snake" },
+  { word: "lemon", emoji: "🍋", sound: "/l/", difficulty: "easy", tips: "Start with your tongue touching the roof" },
   {
     word: "rainbow",
     emoji: "🌈",
@@ -50,8 +52,6 @@ const articulationWords = [
     difficulty: "hard",
     tips: "Make sure to pronounce both R sounds clearly",
   },
-  { word: "snake", emoji: "🐍", sound: "/s/", difficulty: "medium", tips: "Make a long, clear S sound like a snake" },
-  { word: "lemon", emoji: "🍋", sound: "/l/", difficulty: "easy", tips: "Start with your tongue touching the roof" },
 ]
 
 const phrases = [
@@ -202,10 +202,18 @@ export default function SpeechPractice() {
   const [showTips, setShowTips] = useState(false)
   const [recordingTime, setRecordingTime] = useState(0)
 
-  const [loading, setLoading] = useState(false);
-  const [statusMessage, setStatusMessage] = useState('');
-  const [systemActive, setSystemActive] = useState(false);
-  const [message, setMessage] = useState('System ready');
+  // Karen System Integration States
+  const [loading, setLoading] = useState(false)
+  const [statusMessage, setStatusMessage] = useState("")
+  const [systemActive, setSystemActive] = useState(false)
+  const [message, setMessage] = useState("System ready")
+  const [karenStatus, setKarenStatus] = useState({
+    current_animal: null,
+    camera_active: false,
+    karen_status: "Not initialized",
+    last_heard: "",
+    listening: false,
+  })
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
@@ -213,77 +221,166 @@ export default function SpeechPractice() {
   const streamRef = useRef<MediaStream | null>(null)
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null)
 
+  // Karen System Functions
   const checkSystemStatus = async () => {
     try {
-      const response = await api.get('/api/status', {timeout:1000});
-      setSystemActive(response.data.active);
-      setMessage(response.data.message);
+      const response = await api.get("/api/status", { timeout: 3000 })
+      setSystemActive(response.data.active)
+      setMessage(response.data.message)
+      setKarenStatus({
+        current_animal: response.data.current_animal,
+        camera_active: response.data.camera_active,
+        karen_status: response.data.karen_status,
+        last_heard: response.data.last_heard || "",
+        listening: response.data.listening || false,
+      })
     } catch (error) {
-      setSystemActive(false);
-         if (error.code === 'ECONNABORTED') {
-      setMessage('Backend timeout - is it running?');
-    } else if (error.message.includes('Network Error')) {
-      setMessage('Cannot connect to backend');
-    } else {
-      setMessage('Backend unavailable');
+      setSystemActive(false)
+      const err = error as any
+      if (err.code === "ECONNABORTED") {
+        setMessage("Backend timeout - is it running?")
+      } else if (err.message && err.message.includes("Network Error")) {
+        setMessage("Cannot connect to backend")
+      } else {
+        setMessage("Backend unavailable")
+      }
+      console.error("Status check:", error)
     }
-      console.error('Status check:', error);
-    }
-  };
-
-  useEffect(() => {
-    checkSystemStatus();
-  }, []);
+  }
 
   const toggleSystem = async () => {
-    setLoading(true);
-    setMessage('Processing...');
-    
-    try {
-      const response = await api.post('/api/toggle').catch(error => {
-      if (error.code === 'ECONNABORTED') {
-        throw new Error('Backend is taking too long to respond');
-      }
-      throw error;
-    });
-      setSystemActive(response.data.active);
-      setMessage(response.data.message);
-      
-      // Refresh status after delay
-      setTimeout(checkSystemStatus, 1500);
-    } catch (error) {
-      setSystemActive(false);
-      setMessage('Operation failed - check backend');
-      console.error('Toggle error:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    setLoading(true)
+    setMessage("Processing...")
 
-  // Optimized voice analysis function
+    try {
+      const response = await api.post("/api/start").catch((error) => {
+        if (error.code === "ECONNABORTED") {
+          throw new Error("Backend is taking too long to respond")
+        }
+        throw error
+      })
+      setSystemActive(response.data.active)
+      setMessage(response.data.message)
+      setCameraActive(response.data.camera_active || false)
+
+      // Refresh status after delay
+      setTimeout(checkSystemStatus, 2000)
+    } catch (error) {
+      setSystemActive(false)
+      setMessage("Operation failed - check backend")
+      console.error("Toggle error:", error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const stopKarenSystem = async () => {
+    setLoading(true)
+    try {
+      const response = await api.post("/api/stop")
+      setSystemActive(response.data.active)
+      setMessage(response.data.message)
+      setCameraActive(false)
+    } catch (error) {
+      console.error("Stop error:", error)
+      setMessage("Stop failed")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const sendCommandToKaren = async (command: string) => {
+    try {
+      setIsProcessing(true)
+      setStatusMessage("Sending to Karen...")
+
+      const response = await api.post("/api/command", {
+        command: command,
+      })
+
+      if (response.data.status === "success") {
+        setStatusMessage("Karen responded!")
+
+        // Show Karen's response as feedback
+        setFeedback({
+          type: "excellent",
+          message: `🤖 Karen: ${response.data.response}`,
+          show: true,
+        })
+
+        // Update Karen status if available
+        if (response.data.karen_status) {
+          setKarenStatus(response.data.karen_status)
+        }
+
+        // Add points for successful interaction
+        setScore((prev) => prev + 15)
+
+        setTimeout(() => {
+          setFeedback((prev) => ({ ...prev, show: false }))
+        }, 4000)
+      } else {
+        setStatusMessage("Karen error")
+        setFeedback({
+          type: "needsWork",
+          message: `❌ Error: ${response.data.message}`,
+          show: true,
+        })
+      }
+    } catch (error) {
+      console.error("Command error:", error)
+      setStatusMessage("Command failed")
+      setFeedback({
+        type: "poor",
+        message: "❌ Could not connect to Karen system",
+        show: true,
+      })
+    } finally {
+      setIsProcessing(false)
+      setTimeout(() => setStatusMessage(""), 3000)
+    }
+  }
+
+  useEffect(() => {
+    checkSystemStatus()
+    // Check status every 5 seconds
+    const interval = setInterval(checkSystemStatus, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Enhanced voice analysis with Karen integration
   const analyzeRecording = useCallback(
     (context: "word" | "phrase" | "story" | "roleplay") => {
       setIsProcessing(true)
 
-      // Simulate analysis with shorter delay for better UX
+      // Get current item based on context
+      let currentItem = null
+      let commandText = ""
+
+      if (context === "word") {
+        currentItem = articulationWords[currentWordIndex]
+        commandText = `show me ${currentItem.word}`
+      } else if (context === "phrase") {
+        currentItem = phrases[currentPhraseIndex]
+        commandText = currentItem.text
+      }
+
+      // If Karen system is active, send command to Karen
+      if (systemActive && commandText) {
+        sendCommandToKaren(commandText)
+        return
+      }
+
+      // Fallback to original analysis if Karen is not active
       setTimeout(() => {
         const random = Math.random()
         let feedbackType: "excellent" | "good" | "needsWork" | "poor"
         let points = 0
 
-        // Simulate different success rates based on difficulty and attempts
-        const currentItem =
-          context === "word"
-            ? articulationWords[currentWordIndex]
-            : context === "phrase"
-              ? phrases[currentPhraseIndex]
-              : null
-
         const difficultyMultiplier =
           currentItem?.difficulty === "easy" ? 0.8 : currentItem?.difficulty === "medium" ? 0.6 : 0.4
 
-        const attemptsBonus = Math.min(attempts * 0.1, 0.3) // Bonus for multiple attempts
-
+        const attemptsBonus = Math.min(attempts * 0.1, 0.3)
         const successRate = (random + attemptsBonus) * difficultyMultiplier
 
         if (successRate > 0.7) {
@@ -313,14 +410,27 @@ export default function SpeechPractice() {
         setAttempts((prev) => prev + 1)
         setIsProcessing(false)
 
-        // Auto-hide feedback after 4 seconds
         setTimeout(() => {
           setFeedback((prev) => ({ ...prev, show: false }))
         }, 4000)
-      }, 800) // Reduced processing time
+      }, 800)
     },
-    [currentWordIndex, currentPhraseIndex, attempts],
+    [currentWordIndex, currentPhraseIndex, attempts, systemActive],
   )
+
+  // Quick Karen commands for animals
+  const quickKarenCommand = async (animal: string) => {
+    if (systemActive) {
+      await sendCommandToKaren(`show me ${animal}`)
+    } else {
+      setFeedback({
+        type: "needsWork",
+        message: "🤖 Please start Karen system first!",
+        show: true,
+      })
+      setTimeout(() => setFeedback((prev) => ({ ...prev, show: false })), 3000)
+    }
+  }
 
   // Optimized recording timer
   useEffect(() => {
@@ -345,7 +455,6 @@ export default function SpeechPractice() {
   // Optimized voice recording functions
   const startRecording = useCallback(async () => {
     try {
-      // Clean up any existing recording
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop())
       }
@@ -361,13 +470,11 @@ export default function SpeechPractice() {
 
       streamRef.current = stream
 
-      // Use optimized MediaRecorder settings
       const options = {
         mimeType: "audio/webm;codecs=opus",
         audioBitsPerSecond: 128000,
       }
 
-      // Fallback for browsers that don't support webm
       let mediaRecorder
       try {
         mediaRecorder = new MediaRecorder(stream, options)
@@ -391,7 +498,6 @@ export default function SpeechPractice() {
         const url = URL.createObjectURL(audioBlob)
         setAudioURL(url)
 
-        // Analyze the recording based on current context
         if (activeTab === "articulation") {
           analyzeRecording("word")
         } else if (activeTab === "repetition") {
@@ -409,10 +515,9 @@ export default function SpeechPractice() {
         setIsProcessing(false)
       }
 
-      // Start recording with smaller timeslice for better performance
       mediaRecorder.start(100)
       setIsRecording(true)
-      setAudioURL(null) // Clear previous recording
+      setAudioURL(null)
     } catch (error) {
       console.error("Error accessing microphone:", error)
       alert("Please allow microphone access to use voice recording features.")
@@ -426,7 +531,6 @@ export default function SpeechPractice() {
       mediaRecorderRef.current.stop()
       setIsRecording(false)
 
-      // Clean up stream
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop())
         streamRef.current = null
@@ -468,9 +572,7 @@ export default function SpeechPractice() {
 
   const speakText = (text: string) => {
     if ("speechSynthesis" in window) {
-      // Cancel any ongoing speech
       speechSynthesis.cancel()
-
       const utterance = new SpeechSynthesisUtterance(text)
       utterance.rate = 0.8
       utterance.pitch = 1
@@ -606,7 +708,6 @@ export default function SpeechPractice() {
       if (recordingTimerRef.current) {
         clearInterval(recordingTimerRef.current)
       }
-      // Cancel any ongoing speech
       if ("speechSynthesis" in window) {
         speechSynthesis.cancel()
       }
@@ -641,7 +742,7 @@ export default function SpeechPractice() {
       ) : (
         <div className="flex items-center gap-2 text-blue-600">
           <Loader2 className="w-4 h-4 animate-spin" />
-          <span className="text-sm sm:text-base">Analyzing your speech...</span>
+          <span className="text-sm sm:text-base">{statusMessage || "Analyzing your speech..."}</span>
         </div>
       )}
 
@@ -666,6 +767,57 @@ export default function SpeechPractice() {
           <h1 className="text-2xl sm:text-4xl font-bold text-rose-800 mb-2">🗣️ Speech Practice Hub</h1>
           <p className="text-rose-600 text-sm sm:text-lg">Your journey to clearer speech starts here!</p>
         </div>
+
+        {/* Karen System Status */}
+        <Card className="mb-4 sm:mb-6 border-blue-200 bg-gradient-to-r from-blue-100 to-purple-100">
+          <CardHeader className="pb-3 sm:pb-6">
+            <CardTitle className="flex items-center gap-2 text-blue-800 text-lg sm:text-xl">
+              🤖 Karen AI Assistant
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="text-center">
+                <div className={`text-xl sm:text-2xl font-bold ${systemActive ? "text-green-700" : "text-red-700"}`}>
+                  {systemActive ? "🟢" : "🔴"}
+                </div>
+                <div className="text-xs sm:text-sm text-blue-600">{systemActive ? "Active" : "Inactive"}</div>
+              </div>
+              <div className="text-center">
+                <div className="text-sm sm:text-base font-medium text-blue-700">{karenStatus.karen_status}</div>
+                <div className="text-xs sm:text-sm text-blue-600">Status</div>
+              </div>
+              <div className="text-center">
+                <div className="text-sm sm:text-base font-medium text-blue-700">
+                  {karenStatus.current_animal || "None"}
+                </div>
+                <div className="text-xs sm:text-sm text-blue-600">Current Animal</div>
+              </div>
+              <div className="text-center">
+                <div className="flex gap-2 justify-center">
+                  <Button
+                    onClick={systemActive ? stopKarenSystem : toggleSystem}
+                    disabled={loading}
+                    className={`${
+                      systemActive ? "bg-red-500 hover:bg-red-600" : "bg-green-500 hover:bg-green-600"
+                    } text-white text-xs sm:text-sm`}
+                  >
+                    {loading ? "Processing..." : systemActive ? "Stop Karen" : "Start Karen"}
+                  </Button>
+                </div>
+                <div className="text-xs text-blue-600 mt-1">{message}</div>
+              </div>
+            </div>
+
+            {karenStatus.last_heard && (
+              <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+                <p className="text-blue-700 text-sm">
+                  <strong>Last heard:</strong> "{karenStatus.last_heard}"
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Feedback Modal */}
         {feedback.show && (
@@ -777,9 +929,9 @@ export default function SpeechPractice() {
           <TabsContent value="articulation">
             <Card className="border-rose-200">
               <CardHeader className="bg-gradient-to-r from-pink-100 to-orange-100">
-                <CardTitle className="text-rose-800 text-lg sm:text-xl">🎯 Word Practice</CardTitle>
+                <CardTitle className="text-rose-800 text-lg sm:text-xl">🎯 Word Practice with Karen</CardTitle>
                 <CardDescription className="text-rose-600 text-sm">
-                  Practice clear pronunciation of specific sounds
+                  Practice clear pronunciation with Karen AI assistance
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-4 sm:p-6">
@@ -804,6 +956,27 @@ export default function SpeechPractice() {
                     >
                       {articulationWords[currentWordIndex].difficulty}
                     </Badge>
+                  </div>
+
+                  {/* Quick Karen Commands */}
+                  <div className="mb-4">
+                    <p className="text-sm text-blue-600 mb-2">🤖 Quick Karen Commands:</p>
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {articulationWords.map((word, index) => (
+                        <Button
+                          key={index}
+                          size="sm"
+                          variant={index === currentWordIndex ? "primary" : "outline"}
+                          onClick={() => quickKarenCommand(word.word)}
+                          disabled={!systemActive || isProcessing}
+                          className={`text-xs ${
+                            index === currentWordIndex ? "bg-blue-500 text-white" : "border-blue-300 text-blue-700"
+                          }`}
+                        >
+                          {word.emoji} {word.word}
+                        </Button>
+                      ))}
+                    </div>
                   </div>
 
                   {/* Tips Section */}
@@ -1001,51 +1174,79 @@ export default function SpeechPractice() {
           <TabsContent value="mirror">
             <Card className="border-rose-200">
               <CardHeader className="bg-gradient-to-r from-pink-100 to-orange-100">
-                <CardTitle className="text-rose-800 text-lg sm:text-xl">🪞 Mirror Practice</CardTitle>
+                <CardTitle className="text-rose-800 text-lg sm:text-xl">🪞 Mirror Practice with Karen</CardTitle>
                 <CardDescription className="text-rose-600 text-sm">
-                  Watch your mouth movements and compare with the guide
+                  Watch your mouth movements with Karen's camera system
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-4 sm:p-6">
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                   <div className="text-center">
-                    <h3 className="text-base sm:text-lg font-semibold text-rose-800 mb-4">Your Practice</h3>
+                    <h3 className="text-base sm:text-lg font-semibold text-rose-800 mb-4">Karen's Camera View</h3>
                     <div className="relative bg-gray-100 rounded-lg overflow-hidden aspect-video">
                       <video ref={videoRef} autoPlay muted className="w-full h-full object-cover" />
-                      {!cameraActive && (
-                        <div className="absolute inset-0 flex items-center justify-center">
-                          <p className="text-gray-500 text-sm sm:text-base">Camera not active</p>
+                      {!karenStatus.camera_active && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-gray-200">
+                          <div className="text-center">
+                            <Camera className="w-12 h-12 text-gray-400 mx-auto mb-2" />
+                            <p className="text-gray-500 text-sm sm:text-base">
+                              {systemActive ? "Karen camera starting..." : "Start Karen system for camera"}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                      {karenStatus.camera_active && (
+                        <div className="absolute top-2 left-2 bg-green-500 text-white px-2 py-1 rounded text-xs">
+                          🟢 Karen Active
                         </div>
                       )}
                     </div>
-                    <div className="text-center">
-                      <button
-                        onClick={toggleSystem}
+
+                    <div className="mt-4 space-y-2">
+                      <Button
+                        onClick={systemActive ? stopKarenSystem : toggleSystem}
                         disabled={loading}
-                        className={`mt-4 ${
-                          systemActive ? 'bg-rose-600 hover:bg-rose-700' : 'bg-rose-500 hover:bg-rose-600'
-                        } text-white w-full sm:w-auto text-sm sm:text-base px-4 py-2 rounded flex items-center justify-center`}
+                        className={`${
+                          systemActive ? "bg-red-600 hover:bg-red-700" : "bg-green-500 hover:bg-green-600"
+                        } text-white w-full sm:w-auto text-sm sm:text-base`}
                       >
                         <Camera className="w-3 h-3 sm:w-4 sm:h-4 mr-2" />
-                        {loading ? 'Processing...' : systemActive ? 'Stop System' : 'Start System'}
-                      </button>
-                      
-                      <p className={`mt-2 text-sm ${
-                        message.includes('error') || message.includes('fail') ? 'text-red-500' :
-                        message.includes('ready') ? 'text-blue-500' : 'text-green-500'
-                      }`}>
+                        {loading ? "Processing..." : systemActive ? "Stop Karen System" : "Start Karen System"}
+                      </Button>
+
+                      <p
+                        className={`text-sm ${
+                          message.includes("error") || message.includes("fail")
+                            ? "text-red-500"
+                            : message.includes("ready")
+                              ? "text-blue-500"
+                              : "text-green-500"
+                        }`}
+                      >
                         {message}
                       </p>
+
+                      {karenStatus.listening && (
+                        <div className="flex items-center justify-center gap-2 text-blue-600">
+                          <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                          <span className="text-sm">Karen is listening...</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
                   <div className="text-center">
-                    <h3 className="text-base sm:text-lg font-semibold text-rose-800 mb-4">Guide Animation</h3>
+                    <h3 className="text-base sm:text-lg font-semibold text-rose-800 mb-4">Practice Guide</h3>
                     <div className="bg-orange-100 rounded-lg p-6 sm:p-8 aspect-video flex flex-col items-center justify-center">
                       <div className="text-4xl sm:text-6xl mb-4">👄</div>
                       <div className="text-lg sm:text-2xl font-bold text-rose-800 mb-2">
                         {articulationWords[currentWordIndex].word}
                       </div>
+                      {karenStatus.current_animal && (
+                        <div className="text-sm text-green-600 font-medium">
+                          🤖 Karen selected: {karenStatus.current_animal}
+                        </div>
+                      )}
                     </div>
                     <p className="mt-4 text-rose-600 text-sm sm:text-base px-2">
                       Practice the {articulationWords[currentWordIndex].sound} sound: Watch your mouth position
@@ -1057,6 +1258,13 @@ export default function SpeechPractice() {
                       >
                         <Volume2 className="w-3 h-3 sm:w-4 sm:h-4 mr-2" />
                         Hear Word
+                      </Button>
+                      <Button
+                        onClick={() => quickKarenCommand(articulationWords[currentWordIndex].word)}
+                        disabled={!systemActive}
+                        className="bg-purple-500 hover:bg-purple-600 text-white text-sm sm:text-base"
+                      >
+                        🤖 Ask Karen
                       </Button>
                       <Button
                         onClick={nextWord}
@@ -1115,26 +1323,24 @@ export default function SpeechPractice() {
 
               <Card className="border-rose-200 hover:shadow-lg transition-shadow md:col-span-2 xl:col-span-1">
                 <CardHeader className="bg-gradient-to-r from-pink-100 to-orange-100">
-                  <CardTitle className="text-rose-800 text-base sm:text-lg">🌟 Sound Challenge</CardTitle>
+                  <CardTitle className="text-rose-800 text-base sm:text-lg">🤖 Karen Challenge</CardTitle>
                 </CardHeader>
                 <CardContent className="p-4 sm:p-6 text-center">
                   <div className="text-3xl sm:text-4xl mb-4">🎯</div>
-                  <p className="text-rose-600 mb-4 text-sm sm:text-base">Practice your target sounds!</p>
+                  <p className="text-rose-600 mb-4 text-sm sm:text-base">Challenge Karen with animal names!</p>
                   <Button
-                    className="bg-rose-500 hover:bg-rose-600 text-white mb-2 w-full sm:w-auto text-sm sm:text-base"
+                    className="bg-purple-500 hover:bg-purple-600 text-white mb-2 w-full sm:w-auto text-sm sm:text-base"
                     onClick={() => {
-                      setScore((prev) => prev + 10)
-                      setFeedback({
-                        type: "excellent",
-                        message: "🌟 Great job! +10 points!",
-                        show: true,
-                      })
-                      setTimeout(() => setFeedback((prev) => ({ ...prev, show: false })), 2000)
+                      const randomAnimal = articulationWords[Math.floor(Math.random() * articulationWords.length)]
+                      quickKarenCommand(randomAnimal.word)
                     }}
+                    disabled={!systemActive}
                   >
-                    Start Challenge
+                    🤖 Random Animal
                   </Button>
-                  <div className="text-xs sm:text-sm text-rose-600">Current Score: {score}</div>
+                  <div className="text-xs sm:text-sm text-rose-600">
+                    {systemActive ? "Karen is ready!" : "Start Karen first"}
+                  </div>
                 </CardContent>
               </Card>
             </div>
